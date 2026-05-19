@@ -655,14 +655,23 @@
                 if (!res) throw new Error('no chart data');
                 const timestamps = res.timestamp;
                 const closes = res.indicators.quote[0].close;
-                const pts = [];
+                let pts = [];
                 for (let i = 0; i < timestamps.length; i++) {
                     if (closes[i] != null) {
                         const d = new Date(timestamps[i] * 1000);
-                        pts.push({ time: d.toISOString().split('T')[0], value: closes[i] });
+                        pts.push({ time: d.toISOString().split('T')[0], value: closes[i], ts: timestamps[i] });
                     }
                 }
-                return pts;
+                pts.sort((a, b) => a.ts - b.ts);
+                const uniquePts = [];
+                let lastTime = '';
+                for (let p of pts) {
+                    if (p.time !== lastTime) {
+                        uniquePts.push({ time: p.time, value: p.value });
+                        lastTime = p.time;
+                    }
+                }
+                return uniquePts;
             });
             return await Promise.any(tasks);
         }
@@ -875,6 +884,8 @@
                         if (loader) loader.style.display = 'none';
 
                         const chart = LightweightCharts.createChart(container, {
+                            width: container.clientWidth || 300,
+                            height: container.clientHeight || 260,
                             layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#7a8499' },
                             grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
                             rightPriceScale: { borderVisible: false },
