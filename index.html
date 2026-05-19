@@ -613,10 +613,12 @@
             },
         ];
 
-        // CORS 프록시 목록
+        // CORS 프록시 목록 (4개 병렬 경쟁)
         const PROXIES = [
             url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
             url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            url => `https://corsproxy.org/?${encodeURIComponent(url)}`,
+            url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
         ];
 
         let portfolio = JSON.parse(localStorage.getItem('tmv3Portfolio') || '[]');
@@ -624,36 +626,62 @@
         let livePrices = {};
         let refreshTimer = null;
 
-        // ── 데이터 소스별 가격 fetcher ────────────────────────
+        // ── 한국 주식: Stooq + Yahoo + Naver 동시 경쟁 ───────
+        async function fetchKoreanStock(code) {
+            const tasks = [];
 
-        /* Naver Finance polling API (한국 주식) */
-        async function fetchNaver(code) {
-            const base = `https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:${code}`;
-            const tasks = PROXIES.map(async fn => {
-                const r = await fetch(fn(base), { signal: AbortSignal.timeout(6000) });
-                if (!r.ok) throw new Error('http error');
-                const j = await r.json();
-                const d = j?.result?.[`SERVICE_ITEM:${code}`]?.datas?.[0];
-                const p = d?.closePrice ?? d?.lastPrice ?? d?.now;
-                if (!p) throw new Error('no price in response');
-                return Number(String(p).replace(/,/g, ''));
-            });
-            const price = await Promise.any(tasks);
-            if (!price || isNaN(price)) throw new Error('invalid naver price');
-            return price;
-        }
+            // ① Stooq.com CSV (가장 안정적 — 단순 CSV, 프록시 친화적)
+            const stooqUrl = `https://stooq.com/q/l/?s=${code}.ks&f=sd2t2ohlcv&h&e=csv`;
+            for (const fn of PROXIES) {
+                tasks.push((async () => {
+                    const r = await fetch(fn(stooqUrl), { signal: AbortSignal.timeout(8000) });
+                    if (!r.ok) throw new Error('stooq ' + r.status);
+                    const txt = await r.text();
+                    const lines = txt.trim().split('\n');
+                    if (lines.length < 2) throw new Error('stooq no rows');
+                    const cols = lines[1].split(',');
+                    if (cols.length < 7) throw new Error('stooq parse err');
+                    const p = parseFloat(cols[6]);  // Close column
+                    if (!p || p <= 0 || isNaN(p)) throw new Error('stooq bad val: ' + cols[6]);
+                    return p;
+                })());
+            }
 
-        /* Naver Finance 현재가 HTML fallback */
-        async function fetchNaverHtml(code) {
-            const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
-            const tasks = PROXIES.map(async fn => {
-                const r = await fetch(fn(url), { signal: AbortSignal.timeout(7000) });
-                if (!r.ok) throw new Error('http error');
-                const j = await r.json();
-                const p = j?.closePrice ?? j?.currentPrice ?? j?.stockEndPrice;
-                if (!p) throw new Error('no price');
-                return Number(String(p).replace(/,/g, ''));
-            });
+            // ② Yahoo Finance .KS
+            const yahooUrls = [
+                `https://query1.finance.yahoo.com/v8/finance/chart/${code}.KS?interval=1d&range=1d`,
+                `https://query2.finance.yahoo.com/v8/finance/chart/${code}.KS?interval=1d&range=1d`,
+            ];
+            for (const fn of PROXIES) {
+                for (const u of yahooUrls) {
+                    tasks.push((async () => {
+                        const r = await fetch(fn(u), { signal: AbortSignal.timeout(6000) });
+                        if (!r.ok) throw new Error('yahoo ' + r.status);
+                        const j = await r.json();
+                        const m = j?.chart?.result?.[0]?.meta;
+                        const p = m?.regularMarketPrice ?? m?.previousClose;
+                        if (!p || p <= 0) throw new Error('yahoo no price');
+                        return p;
+                    })());
+                }
+            }
+
+            // ③ Naver Finance polling
+            const naverUrl = `https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:${code}`;
+            for (const fn of PROXIES) {
+                tasks.push((async () => {
+                    const r = await fetch(fn(naverUrl), { signal: AbortSignal.timeout(7000) });
+                    if (!r.ok) throw new Error('naver ' + r.status);
+                    const j = await r.json();
+                    const d = j?.result?.[`SERVICE_ITEM:${code}`]?.datas?.[0];
+                    const raw = d?.closePrice ?? d?.lastPrice ?? d?.now;
+                    if (!raw) throw new Error('naver no price');
+                    const p = Number(String(raw).replace(/,/g, ''));
+                    if (!p || isNaN(p)) throw new Error('naver bad num');
+                    return p;
+                })());
+            }
+
             return await Promise.any(tasks);
         }
 
@@ -724,11 +752,7 @@
             try {
                 let price = null;
                 if (stock.source === 'naver') {
-                    try { price = await fetchNaver(stock.code); }
-                    catch (e) {
-                        console.warn(`[naver polling fail] ${stock.id}: ${e.message}`);
-                        price = await fetchNaverHtml(stock.code);
-                    }
+                    price = await fetchKoreanStock(stock.code);
                 } else if (stock.source === 'coingecko') {
                     price = await fetchBtc();
                 } else if (stock.source === 'yahoo') {
@@ -736,7 +760,7 @@
                 }
                 if (price && !isNaN(price)) {
                     livePrices[stock.id] = price;
-                    renderPortfolio(); // 종목마다 도착 즉시 업데이트
+                    renderPortfolio();
                 }
             } catch (e) {
                 console.warn(`[fetchOne fail] ${stock.id}:`, e.message);
