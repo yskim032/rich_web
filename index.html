@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap"
         rel="stylesheet" />
-    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         :root {
             --bg: #070b14;
@@ -643,6 +643,30 @@
         let livePrices = {};
         let refreshTimer = null;
 
+        // ── 과거 장기 데이터(20년) Fetch ─────────
+        async function fetchChartData(symbol) {
+            const enc = encodeURIComponent(symbol);
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${enc}?interval=1mo&range=20y`;
+            const tasks = PROXIES.map(async fn => {
+                const r = await fetch(fn(url), { signal: AbortSignal.timeout(10000) });
+                if (!r.ok) throw new Error('chart fetch fail');
+                const j = await r.json();
+                const res = j?.chart?.result?.[0];
+                if (!res) throw new Error('no chart data');
+                const timestamps = res.timestamp;
+                const closes = res.indicators.quote[0].close;
+                const pts = [];
+                for (let i = 0; i < timestamps.length; i++) {
+                    if (closes[i] != null) {
+                        const d = new Date(timestamps[i] * 1000);
+                        pts.push({ time: d.toISOString().split('T')[0], value: closes[i] });
+                    }
+                }
+                return pts;
+            });
+            return await Promise.any(tasks);
+        }
+
         // ── 한국 주식: Stooq + Yahoo + Naver 동시 경쟁 ───────
         async function fetchKoreanStock(code) {
             const tasks = [];
@@ -833,32 +857,57 @@
 
             // 차트 렌더
             document.getElementById('charts-grid').innerHTML = STOCKS.map(s => `
-                <div class="stock-card" style="padding:8px; height:320px;">
-                    <div style="font-size:12px; color:var(--muted); margin-bottom:4px; padding-left:4px;">${s.name} (${s.ticker})</div>
-                    <div id="tv_${s.id}" style="width:100%; height:calc(100% - 20px);"></div>
+                <div class="stock-card" style="padding:16px; height:320px; display:flex; flex-direction:column;">
+                    <div style="font-size:14px; font-weight:700; margin-bottom:12px;">${s.name} <span style="color:var(--muted); font-size:12px; font-weight:400; margin-left:4px;">(${s.ticker})</span></div>
+                    <div id="chart_${s.id}" style="flex:1; width:100%; position:relative;">
+                       <div id="chart_loader_${s.id}" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:12px; z-index:1;">20년치 과거 차트 불러오는 중...</div>
+                    </div>
                 </div>
             `).join('');
 
-            // TradingView 위젯 초기화 (의존성 로드 대기)
+            // Lightweight Charts 초기화
             setTimeout(() => {
-                STOCKS.forEach(s => {
-                    new TradingView.widget({
-                        "autosize": true,
-                        "symbol": s.tvSymbol,
-                        "interval": "W", // 주봉 단위 장기 차트
-                        "timezone": "Asia/Seoul",
-                        "theme": "dark",
-                        "style": "2", // 라인 차트
-                        "locale": "kr",
-                        "enable_publishing": false,
-                        "backgroundColor": "#070b14", // 배경색 일치
-                        "hide_top_toolbar": true,
-                        "hide_legend": true,
-                        "save_image": false,
-                        "container_id": "tv_" + s.id
-                    });
+                STOCKS.forEach(async s => {
+                    const container = document.getElementById('chart_' + s.id);
+                    try {
+                        const data = await fetchChartData(s.ticker);
+                        const loader = document.getElementById('chart_loader_' + s.id);
+                        if (loader) loader.style.display = 'none';
+
+                        const chart = LightweightCharts.createChart(container, {
+                            layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#7a8499' },
+                            grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
+                            rightPriceScale: { borderVisible: false },
+                            timeScale: { borderVisible: false },
+                            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                            handleScroll: false,
+                            handleScale: false
+                        });
+
+                        const lineSeries = chart.addAreaSeries({
+                            lineColor: s.color,
+                            topColor: s.color,
+                            bottomColor: 'rgba(7, 11, 20, 0)',
+                            lineWidth: 2
+                        });
+
+                        lineSeries.setData(data);
+                        chart.timeScale().fitContent();
+
+                        // Resize handler
+                        new ResizeObserver(entries => {
+                            if (entries.length === 0 || entries[0].target !== container) return;
+                            const newRect = entries[0].contentRect;
+                            chart.applyOptions({ width: newRect.width, height: newRect.height });
+                        }).observe(container);
+
+                    } catch (e) {
+                        const loader = document.getElementById('chart_loader_' + s.id);
+                        if (loader) loader.textContent = '차트 데이터를 불러오지 못했습니다.';
+                        console.warn('chart load fail', s.ticker, e);
+                    }
                 });
-            }, 600);
+            }, 300);
         }
 
         function updateHint(id) {
