@@ -2,7 +2,7 @@
 
 > 20년 전 가격으로 삼성전자, SK하이닉스, 현대차, 비트코인, 엔비디아를 사고 — 오늘 실시간 시세로 내 자산을 확인하는 가상 시뮬레이션 게임!
 
-🔗 **[지금 플레이하기 →](https://[your-username].github.io/[repo-name]/)**
+🔗 **[지금 플레이하기 →](https://yskim032.github.io/RICH_WEB/)**
 
 ---
 
