@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap"
         rel="stylesheet" />
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
     <style>
         :root {
             --bg: #070b14;
@@ -533,7 +534,23 @@
 
     <div class="container">
         <div class="section-title">20년 전 가격으로 매수하기</div>
-        <div class="stocks-grid" id="stocks-grid"></div>
+        <div style="overflow-x:auto;">
+            <table class="portfolio-table">
+                <thead>
+                    <tr>
+                        <th>종목</th>
+                        <th>매수가 (20년 전)</th>
+                        <th>기준</th>
+                        <th>수량 입력</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="buy-table-body"></tbody>
+            </table>
+        </div>
+
+        <div class="section-title" style="margin-top:40px;">종목별 장기 차트 (과거 ~ 현재)</div>
+        <div class="stocks-grid" id="charts-grid"></div>
 
         <div id="portfolio-section">
             <div class="section-title" style="margin-top:48px;">
@@ -589,27 +606,27 @@
             {
                 id: 'samsung', name: '삼성전자', ticker: '005930.KS', emoji: '🔵', color: '#1428a0',
                 histYear: 2006, histPrice: 14000, currency: 'KRW', unit: '주',
-                note: '2006년 평균가 (~₩700,000 → 50:1 분할 조정)', source: 'naver', code: '005930'
+                note: '2006년 평균가 (~₩700,000 → 50:1 분할 조정)', source: 'naver', code: '005930', tvSymbol: 'KRX:005930'
             },
             {
                 id: 'skhynix', name: 'SK하이닉스', ticker: '000660.KS', emoji: '🟢', color: '#e4002b',
                 histYear: 2006, histPrice: 22000, currency: 'KRW', unit: '주',
-                note: '2006년 평균가 기준', source: 'naver', code: '000660'
+                note: '2006년 평균가 기준', source: 'naver', code: '000660', tvSymbol: 'KRX:000660'
             },
             {
                 id: 'hyundai', name: '현대자동차', ticker: '005380.KS', emoji: '🔴', color: '#002c5f',
                 histYear: 2006, histPrice: 58000, currency: 'KRW', unit: '주',
-                note: '2006년 평균가 기준', source: 'naver', code: '005380'
+                note: '2006년 평균가 기준', source: 'naver', code: '005380', tvSymbol: 'KRX:005380'
             },
             {
                 id: 'bitcoin', name: '비트코인', ticker: 'BTC-USD', emoji: '🟡', color: '#f7931a',
                 histYear: 2010, histPrice: 0.08, currency: 'USD', unit: 'BTC', isCrypto: true,
-                note: '2010년 최초 거래 가격 ~$0.08', source: 'coingecko'
+                note: '2010년 최초 거래 가격 ~$0.08', source: 'coingecko', tvSymbol: 'BINANCE:BTCUSD'
             },
             {
                 id: 'nvidia', name: '엔비디아', ticker: 'NVDA', emoji: '🟩', color: '#76b900',
                 histYear: 2006, histPrice: 0.31, currency: 'USD', unit: '주',
-                note: '2006년 주가 ~$25 → 분할 조정 (2:1×4:1×10:1)', source: 'yahoo', code: 'NVDA'
+                note: '2006년 주가 ~$25 → 분할 조정 (2:1×4:1×10:1)', source: 'yahoo', code: 'NVDA', tvSymbol: 'NASDAQ:NVDA'
             },
         ];
 
@@ -792,29 +809,56 @@
             if (tx) tx.textContent = msg;
         }
 
-        // ── 매수 카드 렌더 ────────────────────────────────────
-        function renderBuyCards() {
-            document.getElementById('stocks-grid').innerHTML = STOCKS.map(s => `
-    <div class="stock-card">
-      <div class="card-header">
-        <div><div class="card-name">${s.name}</div><div class="card-ticker">${s.ticker}</div></div>
-      </div>
-      <div class="price-row">
-        <span class="label">${s.histYear}년 매수가</span>
-        <span class="value">${fmtPrice(s.histPrice, s.currency)}</span>
-      </div>
-      <div class="price-row">
-        <span style="font-size:11px;color:var(--muted);text-align:right;max-width:200px;">${s.note}</span>
-      </div>
-      <div class="qty-row">
-        <input class="qty-input" id="qty-${s.id}" type="number" min="0"
-          step="${s.isCrypto ? '0.001' : '1'}" placeholder="${s.unit} 수량 입력"
-          oninput="updateHint('${s.id}')"/>
-        <button class="buy-btn" onclick="addToPf('${s.id}')">매수</button>
-      </div>
-      <div class="cost-hint" id="hint-${s.id}"></div>
-    </div>
-  `).join('');
+        // ── 매수 테이블 및 차트 렌더 ────────────────────────────────────
+        function renderBuyTable() {
+            document.getElementById('buy-table-body').innerHTML = STOCKS.map(s => `
+                <tr>
+                    <td>
+                        <div style="font-weight:700;">${s.name}</div>
+                        <div style="font-size:11px;color:var(--muted);">${s.ticker}</div>
+                    </td>
+                    <td style="color:var(--gold); font-weight:600;">${fmtPrice(s.histPrice, s.currency)}</td>
+                    <td style="font-size:11px;color:var(--muted); max-width:200px;">${s.note}</td>
+                    <td>
+                        <div style="display:flex; flex-direction:column; gap:4px;">
+                            <input class="qty-input" id="qty-${s.id}" type="number" min="0" step="${s.isCrypto ? '0.001' : '1'}" placeholder="${s.unit} 입력" oninput="updateHint('${s.id}')" style="padding:6px 10px; max-width:120px;"/>
+                            <div class="cost-hint" id="hint-${s.id}" style="margin:0; min-height:14px; font-size:11px;"></div>
+                        </div>
+                    </td>
+                    <td>
+                        <button class="buy-btn" onclick="addToPf('${s.id}')">매수</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            // 차트 렌더
+            document.getElementById('charts-grid').innerHTML = STOCKS.map(s => `
+                <div class="stock-card" style="padding:8px; height:320px;">
+                    <div style="font-size:12px; color:var(--muted); margin-bottom:4px; padding-left:4px;">${s.name} (${s.ticker})</div>
+                    <div id="tv_${s.id}" style="width:100%; height:calc(100% - 20px);"></div>
+                </div>
+            `).join('');
+
+            // TradingView 위젯 초기화 (의존성 로드 대기)
+            setTimeout(() => {
+                STOCKS.forEach(s => {
+                    new TradingView.widget({
+                        "autosize": true,
+                        "symbol": s.tvSymbol,
+                        "interval": "W", // 주봉 단위 장기 차트
+                        "timezone": "Asia/Seoul",
+                        "theme": "dark",
+                        "style": "2", // 라인 차트
+                        "locale": "kr",
+                        "enable_publishing": false,
+                        "backgroundColor": "#070b14", // 배경색 일치
+                        "hide_top_toolbar": true,
+                        "hide_legend": true,
+                        "save_image": false,
+                        "container_id": "tv_" + s.id
+                    });
+                });
+            }, 600);
         }
 
         function updateHint(id) {
@@ -919,11 +963,11 @@
         // ── 자동 갱신 ─────────────────────────────────────────
         function startAutoRefresh() {
             if (refreshTimer) clearInterval(refreshTimer);
-            refreshTimer = setInterval(() => { if (portfolio.length > 0) fetchAllPrices(); }, 5 * 60 * 1000);
+            refreshTimer = setInterval(() => { if (portfolio.length > 0) fetchAllPrices(); }, 5000);
         }
 
         // ── INIT ──────────────────────────────────────────────
-        renderBuyCards();
+        renderBuyTable();
         renderPortfolio();
         if (portfolio.length > 0) fetchAllPrices();
         startAutoRefresh();
